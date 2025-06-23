@@ -1,0 +1,5 @@
+E:/DATA/cmems_data/CMEMS_historical_so_2021-07-01_to_2024-12-31_part2.nc
+E:/DATA/MSWEP-supplement/2021002.nc
+E:/DATA/cmems_data/CMEMS_forecast_VHM0_2025-06-11_to_2025-06-18.nc
+E:/DATA/cmems_data/CMEMS_historical_sea_surface_height_2015-01-01_to_2021-06-30_part1.nc
+E:/DATA/wind_data/wind/era5_surface_20160101_20161231.nc
