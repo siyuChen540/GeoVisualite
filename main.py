@@ -13,15 +13,22 @@
 
 import sys
 import os
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+
 import netCDF4
 import numpy as np
 import geopandas as gpd
+
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+
 import cartopy.crs as ccrs
-import qtawesome as qta
 from cartopy.mpl.geoaxes import GeoAxes
+
+import qtawesome as qta
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTextEdit, QPushButton, QVBoxLayout,
                              QWidget, QFileDialog, QHBoxLayout, QSplitter, QListWidget,
@@ -118,8 +125,8 @@ class NavigableCartopyToolbar(NavigationToolbar):
         super().__init__(canvas, parent)
         
         # Create navigation actions
-        self.action_prev = QAction(qta.icon('fa5s.chevron-left', color='#333'), "上一个", self)
-        self.action_next = QAction(qta.icon('fa5s.chevron-right', color='#333'), "下一个", self)
+        self.action_prev = QAction(qta.icon('fa5s.chevron-circle-left', color='#0078d7'), "上一个", self)
+        self.action_next = QAction(qta.icon('fa5s.chevron-circle-right', color='#0078d7'), "下一个", self)
         
         # Create a label to show navigation info and wrap it in a QWidgetAction
         self.nav_label = QLabel("N/A")
@@ -177,7 +184,7 @@ class GeospatialTool(QMainWindow):
     def initUI(self):
         self.setWindowTitle('地理空间数据可视化工具 (NC/SHP) - V3.6')
         self.setGeometry(100, 100, 1400, 900)
-        self.setWindowIcon(qta.icon('fa5s.globe-americas', color='#1e3050'))
+        self.setWindowIcon(qta.icon('fa5s.globe-asia', color="#acc3eb"))
 
         main_layout = QHBoxLayout()
         splitter = QSplitter(Qt.Horizontal)
@@ -253,9 +260,56 @@ class GeospatialTool(QMainWindow):
         self.setCentralWidget(central_widget)
         self.setAcceptDrops(True)
     
-    # --- The rest of the code is largely the same, with key changes noted ---
+    # def set_custom_coord_format(self, ax: GeoAxes):
+    #     """
+    #     为给定的 GeoAxes 设置自定义的鼠标坐标显示格式。
+    #     默认格式为度分秒，这里修改为十进制度数。
+    #     """
+    #     def formatter(x: float, y: float) -> str:
+    #         # 将经纬度格式化为带有4位小数的浮点数
+    #         return f"坐标值 ({x:.4f}, {y:.4f})"
+        
+    #     ax.format_coord = formatter
+    def set_custom_coord_format(self, ax: GeoAxes, data_array, x_coords_1d, y_coords_1d):
+        """
+        define the custom coordinate format for the GeoAxes.
+
+        Args:
+            ax: The GeoAxes object.
+            data_array (np.array): 2D numpy array of the plotted data.
+            x_coords_1d (np.array): 1D numpy array for longitude.
+            y_coords_1d (np.array): 1D numpy array for latitude.
+        """
+        # If the coordinates are not provided, use a fallback formatter
+        if x_coords_1d is None or y_coords_1d is None or x_coords_1d.ndim != 1 or y_coords_1d.ndim != 1:
+            def fallback_formatter(x, y):
+                return f"经度: {x:.4f}, 纬度: {y:.4f}"
+            ax.format_coord = fallback_formatter
+            return
+
+        def formatter(x, y):
+            # find the closest indices in the 1D coordinate arrays
+            col_idx = np.abs(x_coords_1d - x).argmin()
+            row_idx = np.abs(y_coords_1d - y).argmin()
+
+            # check if the indices are within bounds of the data array
+            if 0 <= row_idx < data_array.shape[0] and 0 <= col_idx < data_array.shape[1]:
+                value = data_array[row_idx, col_idx]
+                
+                # process the value to handle masked arrays
+                if np.ma.is_masked(value):
+                    value_str = "N/A (masked)"
+                else:
+                    value_str = f"{value:.4f}" 
+                
+                return f"经度: {x:.4f}, 纬度: {y:.4f}, 值: {value_str}"
+            else:
+                # 如果鼠标在绘图区域外，则不显示值
+                return f"经度: {x:.4f}, 纬度: {y:.4f}, 值: N/A (out of bounds)"
+        
+        # 将 ax 的坐标格式化函数设置为我们上面定义的 formatter
+        ax.format_coord = formatter
     
-    # ... (return_to_initial_state, display_history, drag/drop, file loading methods are unchanged)
     def return_to_initial_state(self):
         self.text_edit.clear()
         self.variable_list.clear()
@@ -449,6 +503,7 @@ class GeospatialTool(QMainWindow):
 
             self.figure.clear()
             ax = self.figure.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+            self.set_custom_coord_format(ax, data, x, y)  # Set custom coordinate format
             ax._autoscaleXon = False
             ax._autoscaleYon = False
             
@@ -488,13 +543,28 @@ class GeospatialTool(QMainWindow):
             if data.ndim != 2:
                 self.show_error_message(f"变量 '{var_name}' 无法简化为二维数组 (shape: {data.shape}).")
                 return
+            lon_1d, lat_1d = None, None
+            possible_lon_names = ['lon', 'longitude', 'x']
+            possible_lat_names = ['lat', 'latitude', 'y']
+            var_dims = var.dimensions
+            
+            # 尝试从变量的维度中寻找坐标轴名称
+            lon_dim_name = next((d for d in var_dims for n in possible_lon_names if n in d.lower()), None)
+            lat_dim_name = next((d for d in var_dims for n in possible_lat_names if n in d.lower()), None)
 
+            if lon_dim_name and lat_dim_name:
+                # 确保维度存在于文件中
+                if lon_dim_name in self.nc_dataset.variables and lat_dim_name in self.nc_dataset.variables:
+                    lon_1d = self.nc_dataset.variables[lon_dim_name][:]
+                    lat_1d = self.nc_dataset.variables[lat_dim_name][:]
+            
             lon, lat = self.find_nc_coords(var)
             if lon is None or lat is None:
                 self.show_error_message(f"无法自动找到 '{var_name}' 的经纬度坐标。")
                 return
 
             ax: GeoAxes = self.figure.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+            self.set_custom_coord_format(ax, data, lon_1d, lat_1d)  # Set custom coordinate format
             ax._autoscaleXon = False
             ax._autoscaleYon = False
             ax.set_global()
@@ -577,7 +647,7 @@ class GeospatialTool(QMainWindow):
             if lon_var_name and lat_var_name:
                 lon = self.nc_dataset.variables.get(lon_var_name, [])[:]
                 lat = self.nc_dataset.variables.get(lat_var_name, [])[:]
-
+        
         if lon is not None and lat is not None and lon.ndim == 1 and lat.ndim == 1:
             lon, lat = np.meshgrid(lon, lat)
         return lon, lat
